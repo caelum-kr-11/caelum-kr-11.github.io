@@ -1,8 +1,3 @@
----
-layout: default
-title: "Free crypto wallet alert: Base and Ethereum balance changes via GitHub Actions"
-description: Get a phone or Discord alert when a Base or Ethereum wallet balance (ETH or USDC) changes. Free, read-only, no API key or server.
----
 # Free crypto wallet alert: get a ping when a Base or Ethereum balance changes (GitHub Actions)
 
 Want to know when a payment lands, when a hot wallet gets drained, or when a treasury moves? You don't need an API key, a paid monitoring bot, or a server. A scheduled GitHub Actions workflow can read balances from a public RPC, keep the last values in git, and alert you only when one changes.
@@ -62,6 +57,11 @@ jobs:
           curl -s -d "Balance changed: $(git diff -U0 balances.csv | grep '^+[^+]')" "$WEBHOOK"
           git config user.name bot && git config user.email bot@users.noreply.github.com
           git add balances.csv && git commit -m "balances: $(date -u +%FT%TZ)" && git push
+      - name: Keepalive (GitHub pauses cron after 60 days without commits)
+        run: |
+          [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -lt 4320000 ] && exit 0
+          git config user.name bot && git config user.email bot@users.noreply.github.com
+          git commit --allow-empty -m "keepalive: still watching" && git push
 ```
 
 Commit an empty `balances.csv`, then run the workflow once by hand.
@@ -70,7 +70,8 @@ Commit an empty `balances.csv`, then run the workflow once by hand.
 Set the repo secret `ALERT_WEBHOOK` to `https://ntfy.sh/<long-random-topic>` and subscribe to that topic in the **[ntfy](https://ntfy.sh)** phone app. Topics are public, so pick an unguessable name. Discord and Slack webhooks need a JSON body instead.
 
 ## Notes and limits
-- **Privacy:** in a public repo, your addresses and balance history are public too. Use a private repo (2,000 free Actions minutes a month; each run takes about 15 seconds, so every 30 minutes fits easily) or accept that, since balances are on-chain anyway.
+- **Privacy:** in a public repo, your addresses and balance history are public too. Use a private repo (2,000 free Actions minutes a month; each run is billed as a full minute, so every 30 minutes (about 1,440 a month) fits but every 15 does not) or accept that, since balances are on-chain anyway.
+- GitHub pauses scheduled workflows in public repos after 60 days without activity. A balance that never moves would never commit, so the keepalive step makes an empty commit after 50 quiet days.
 - GitHub cron can run several minutes late. This suits "tell me today", not trading.
 - Public RPCs are rate-limited. A few addresses every 15 minutes is fine. Use your own RPC URL for more.
 - Other EVM chains work the same way: change the RPC and the USDC contract address.
