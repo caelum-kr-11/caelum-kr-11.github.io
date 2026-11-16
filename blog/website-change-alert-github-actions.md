@@ -1,8 +1,3 @@
----
-layout: default
-title: Get a free alert when a web page changes, using GitHub Actions
-description: Watch a price, stock status or version on a schedule with GitHub Actions and get a phone or Discord alert only when it changes.
----
 # Get a free alert when a web page changes (price, stock, version), using GitHub Actions
 
 Want a ping on your phone or in Discord when a product's price drops, an item comes back in stock, or a new version ships? You don't need a paid monitoring service. GitHub Actions can check the page on a schedule, keep the last value in git, and alert you only when it changes.
@@ -34,6 +29,11 @@ jobs:
           curl -s -d "Changed: $(cat value.txt)" "$WEBHOOK"
           git config user.name bot && git config user.email bot@users.noreply.github.com
           git commit -am "value: $(cat value.txt)" && git push
+      - name: Keepalive (GitHub pauses cron after 60 days without commits)
+        run: |
+          [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -lt 4320000 ] && exit 0
+          git config user.name bot && git config user.email bot@users.noreply.github.com
+          git commit --allow-empty -m "keepalive: still watching, last value $(cat value.txt)" && git push
 ```
 
 ## 2. The checker (no dependencies)
@@ -62,9 +62,13 @@ Commit an empty `value.txt`, then run the workflow once by hand.
 ## Notes
 - Prefer an official API or feed when there is one; it's more stable than HTML.
 - Check the site's terms and robots.txt, and keep the interval reasonable. Every 30–60 minutes is plenty for prices.
+- GitHub pauses scheduled workflows in public repos after 60 days without activity. A price that stays flat would then look exactly like "no change". The keepalive step makes an empty commit once 50 days have passed without one, which keeps the schedule alive and doubles as a "still watching" heartbeat.
+- Scheduled runs can be delayed or skipped when Actions is busy, so treat `*/30` as a target, not a guarantee.
 - Public repos get unlimited Actions minutes. Private repos get 2,000 a month, and each check takes about 15 seconds.
 
 ## Want it ready-made?
 The free **[git-scraper-kit](https://github.com/caelum-kr-11/git-scraper-kit)** template does scheduled scraping with history. The **[Pro Pack](https://caelum-kr-11.github.io/#buy)** (12 USDC) adds a multi-page watcher like the one above, alerts with proper Discord, Slack and ntfy formatting that only fire for the files you choose, and six more ready-made scrapers.
 
 *Written with AI assistance; the code was tested before publishing.*
+
+Thanks to holdalarms on DEV for pointing out the 60-day pause.
