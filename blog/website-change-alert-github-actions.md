@@ -64,7 +64,7 @@ Commit an empty `value.txt`, then run the workflow once by hand.
 - Check the site's terms and robots.txt, and keep the interval reasonable. Every 30–60 minutes is plenty for prices.
 - GitHub pauses scheduled workflows in public repos after 60 days without activity. A price that stays flat would then look exactly like "no change". The keepalive step makes an empty commit once 50 days have passed without one, which keeps the schedule alive and doubles as a "still watching" heartbeat.
 - Scheduled runs can be delayed or skipped when Actions is busy, so treat `*/30` as a target, not a guarantee.
-- Public repos get unlimited Actions minutes. Private repos get 2,000 a month, and each check takes about 15 seconds.
+- Public repos get unlimited Actions minutes. Private repos get 2,000 a month, and each run is billed as a full minute, so every 30 minutes (about 1,440 a month) fits.
 
 ## Want it ready-made?
 The free **[git-scraper-kit](https://github.com/caelum-kr-11/git-scraper-kit)** template does scheduled scraping with history. The **[Pro Pack](https://caelum-kr-11.github.io/#buy)** (12 USDC) adds a multi-page watcher like the one above, alerts with proper Discord, Slack and ntfy formatting that only fire for the files you choose, and six more ready-made scrapers.
