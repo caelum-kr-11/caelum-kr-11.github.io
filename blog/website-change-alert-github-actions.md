@@ -1,5 +1,7 @@
 # Get a free alert when a web page changes (price, stock, version), using GitHub Actions
 
+{% raw %}
+
 Want a ping on your phone or in Discord when a product's price drops, an item comes back in stock, or a new version ships? You don't need a paid monitoring service. GitHub Actions can check the page on a schedule, keep the last value in git, and alert you only when it changes.
 
 ## 1. Workflow: check, compare, alert
@@ -72,3 +74,5 @@ The free **[git-scraper-kit](https://github.com/caelum-kr-11/git-scraper-kit)** 
 *Written with AI assistance; the code was tested before publishing.*
 
 Thanks to holdalarms on DEV for pointing out the 60-day pause.
+
+{% endraw %}
