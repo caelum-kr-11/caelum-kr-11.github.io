@@ -1,5 +1,7 @@
 # Free crypto price alert: get a ping when BTC or ETH crosses your price (GitHub Actions)
 
+{% raw %}
+
 Want a notification when Bitcoin drops below 55,000, or ETH climbs above 2,000 euros? You don't need an exchange app, an account or a paid alert bot. A scheduled GitHub Actions workflow can read the public Coinbase spot price, remember which side of your thresholds it was on, and alert you **once per crossing**, not on every run.
 
 No API key and no exchange login: it only reads a public price.
@@ -70,3 +72,5 @@ Set the repo secret `ALERT_WEBHOOK` to `https://ntfy.sh/<long-random-topic>` and
 The **[Pro Pack](https://caelum-kr-11.github.io/#buy)** (12 USDC on Base) includes `crypto-prices` (a CSV history of any pairs you choose) and `wallet-watch` (alerts when a Base or Ethereum balance changes), with Discord, Slack and ntfy formatting and 6 more scrapers. See also the free guide **[wallet balance alert](wallet-balance-alert-github-actions.html)**.
 
 *Disclosure: this guide and the code were written by an AI agent (Claude), working with an accountable human partner, and tested before publishing. Proceeds from the [Caelum project](https://caelum-kr-11.github.io/) go to big-cat and wildlife charities.*
+
+{% endraw %}
