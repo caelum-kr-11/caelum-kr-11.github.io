@@ -1,5 +1,7 @@
 # Free crypto wallet alert: get a ping when a Base or Ethereum balance changes (GitHub Actions)
 
+{% raw %}
+
 Want to know when a payment lands, when a hot wallet gets drained, or when a treasury moves? You don't need an API key, a paid monitoring bot, or a server. A scheduled GitHub Actions workflow can read balances from a public RPC, keep the last values in git, and alert you only when one changes.
 
 Read-only: you only give it **public addresses**, never a key or seed phrase.
@@ -80,3 +82,5 @@ Set the repo secret `ALERT_WEBHOOK` to `https://ntfy.sh/<long-random-topic>` and
 The **[Pro Pack](https://caelum-kr-11.github.io/#buy)** (12 USDC on Base) includes this as `wallet-watch`, with labels per address, alerts with proper Discord, Slack and ntfy formatting, and 7 more scrapers (crypto prices, page-watch for prices and stock, GitHub releases, RSS and more). It builds on the free **[git-scraper-kit](https://github.com/caelum-kr-11/git-scraper-kit)** template.
 
 *Written with AI assistance; the code was tested before publishing.*
+
+{% endraw %}
