@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Orbit Hop</title>
+<style>
+html,body{margin:0;height:100%;background:#0b0f1a;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
+<script>
+// Orbit Hop: one-tap arcade. Your comet circles a star on two rings; tap to hop rings.
+// Collect sparks, dodge meteors that fly in from the edge. Speed rises with score.
+const cv = document.getElementById('c'), cx = cv.getContext('2d');
+let W, H, S, R1, R2;
+function resize() {
+  const d = Math.min(devicePixelRatio || 1, 2);
+  W = cv.width = innerWidth * d; H = cv.height = innerHeight * d;
+  S = Math.min(W, H); R1 = S * 0.2; R2 = S * 0.34;
+}
+addEventListener('resize', resize); resize();
+
+const BEST_KEY = 'orbit-hop-best';
+let best = +localStorage.getItem(BEST_KEY) || 0;
+let ac = null, muted = false, adBusy = false, games = 0, paused = false;
+// Portal SDK (CrazyGames v3). Optional: the game runs the same without it.
+let sdk = null;
+const cg = (f) => { try { if (sdk) f(sdk); } catch (e) {} };
+const store = { get: k => (sdk ? sdk.data : localStorage).getItem(k), set: (k, v) => (sdk ? sdk.data : localStorage).setItem(k, v) };
+(async () => {
+  try {
+    const S0 = window.CrazyGames && window.CrazyGames.SDK;
+    if (S0) { await S0.init(); if (S0.environment !== 'disabled') sdk = S0; }
+  } catch (e) {}
+  cg(s => { muted = s.game.settings.muteAudio; s.game.addSettingsChangeListener(st => { muted = st.muteAudio; }); });
+  best = +store.get(BEST_KEY) || best;
+})();
+
+// Tiny synth sound effects; M key or the corner button toggles mute.
+function beep(f, d, type = 'sine', vol = 0.15, slide = 0) {
+  if (muted || adBusy) return;
+  try {
+    ac = ac || new AudioContext(); if (ac.state === 'suspended') ac.resume();
+    const o = ac.createOscillator(), g = ac.createGain(), n = ac.currentTime;
+    o.type = type; o.frequency.setValueAtTime(f, n); if (slide) o.frequency.exponentialRampToValueAtTime(slide, n + d);
+    g.gain.setValueAtTime(vol, n); g.gain.exponentialRampToValueAtTime(0.001, n + d);
+    o.connect(g).connect(ac.destination); o.start(n); o.stop(n + d);
+  } catch (e) {}
+}
+
+let state = 'menu', t = 0, score = 0, ang = 0, ring = 1, rNow = 1, dir = 1;
+let sparks = [], meteors = [], bits = [], spawnT = 0, flash = 0;
+
+function reset() {
+  score = 0; ang = -Math.PI / 2; ring = 1; rNow = 1; dir = 1;
+  sparks = []; meteors = []; bits = []; spawnT = 0; t = 0;
+  for (let i = 0; i < 3; i++) addSpark();
+}
+const radius = r => R1 + (R2 - R1) * r;           // r: 0 = inner ring, 1 = outer ring
+const speed = () => 1.6 + Math.min(score, 60) * 0.035; // radians per second
+function addSpark() {
+  sparks.push({ a: ang + 1 + Math.random() * (Math.PI * 2 - 2), r: Math.random() < 0.5 ? 0 : 1 });
+}
+function addMeteor() {
+  // Aim at a random point on one of the rings, ahead of the player.
+  const r = Math.random() < 0.5 ? 0 : 1, a = ang + dir * (1.2 + Math.random() * 2);
+  const tx = W / 2 + Math.cos(a) * radius(r), ty = H / 2 + Math.sin(a) * radius(r);
+  const from = Math.random() * Math.PI * 2, D = Math.hypot(W, H) * 0.6;
+  const x = W / 2 + Math.cos(from) * D, y = H / 2 + Math.sin(from) * D;
+  const v = S * (0.25 + Math.min(score, 60) * 0.006), L = Math.hypot(tx - x, ty - y);
+  meteors.push({ x, y, vx: (tx - x) / L * v, vy: (ty - y) / L * v, life: 0 });
+}
+function burst(x, y, col, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 7, v = S * (0.1 + Math.random() * 0.4);
+    bits.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, l: 1, col });
+  }
+}
+const muteBtn = () => [W - S * 0.07, S * 0.07, S * 0.05]; // x, y, hit radius
+function start() { reset(); state = 'play'; paused = false; cg(s => s.game.gameplayStart()); }
+function tap(e) {
+  e.preventDefault();
+  if (ac && ac.state === 'suspended') ac.resume(); // iOS needs a gesture
+  if (adBusy) return;
+  if (e.clientX !== undefined) {
+    const d = Math.min(devicePixelRatio || 1, 2), [mx, my, mr] = muteBtn();
+    if (Math.hypot(e.clientX * d - mx, e.clientY * d - my) < mr) { muted = !muted; return; }
+  }
+  if (paused) { paused = false; cg(s => s.game.gameplayStart()); return; }
+  if (state === 'play') { ring = 1 - ring; beep(ring ? 520 : 390, 0.08, 'triangle', 0.08); }
+  else if (state === 'menu' || (state === 'over' && t > 0.6)) {
+    // A midgame ad every third restart; SDK refuses it where ads are off (e.g. Basic Launch).
+    if (state === 'over' && sdk && games % 3 === 0) {
+      adBusy = true;
+      const done = () => { adBusy = false; start(); };
+      cg(s => s.ad.requestAd('midgame', { adStarted: () => {}, adFinished: done, adError: done }));
+      if (!sdk) done();
+    } else start();
+  }
+}
+function pause() { if (state === 'play' && !paused) { paused = true; cg(s => s.game.gameplayStop()); } }
+addEventListener('blur', pause);
+document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+cv.addEventListener('pointerdown', tap);
+addEventListener('keydown', e => { if (e.code === 'KeyM') { muted = !muted; return; } if (e.code === 'KeyP' || e.code === 'Escape') { pause(); return; } if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'ArrowDown') tap(e); });
+
+function player() { const r = radius(rNow); return [W / 2 + Math.cos(ang) * r, H / 2 + Math.sin(ang) * r]; }
+
+function update(dt) {
+  t += dt; flash = Math.max(0, flash - dt * 3);
+  for (const b of bits) { b.x += b.vx * dt; b.y += b.vy * dt; b.l -= dt * 1.5; }
+  bits = bits.filter(b => b.l > 0);
+  if (state !== 'play' || paused || adBusy) return;
+  ang += dir * speed() * dt;
+  rNow += (ring - rNow) * Math.min(1, dt * 14);
+  const [px, py] = player(), hit = S * 0.035;
+  for (const s of sparks) {
+    const sx = W / 2 + Math.cos(s.a) * radius(s.r), sy = H / 2 + Math.sin(s.a) * radius(s.r);
+    if (Math.hypot(sx - px, sy - py) < hit * 1.4) {
+      s.dead = true; score++; burst(sx, sy, '#ffd25a', 10); beep(880 + (score % 10) * 40, 0.12, 'sine', 0.12);
+      if (score % 10 === 0) { dir = -dir; flash = 1; beep(330, 0.3, 'sawtooth', 0.06, 990); } // every 10 points the orbit reverses
+    }
+  }
+  sparks = sparks.filter(s => !s.dead); while (sparks.length < 3) addSpark();
+  spawnT -= dt;
+  if (spawnT <= 0) { addMeteor(); spawnT = Math.max(0.55, 1.6 - score * 0.02); }
+  for (const m of meteors) {
+    m.x += m.vx * dt; m.y += m.vy * dt; m.life += dt;
+    if (Math.hypot(m.x - px, m.y - py) < hit) { die(px, py); return; }
+  }
+  meteors = meteors.filter(m => m.life < 8);
+}
+function die(x, y) {
+  burst(x, y, '#7fd4ff', 40); state = 'over'; t = 0; games++;
+  beep(220, 0.5, 'square', 0.1, 55);
+  cg(s => s.game.gameplayStop());
+  if (score > best) { best = score; try { store.set(BEST_KEY, best); } catch (e) {} if (best > 5) cg(s => s.game.happytime()); }
+}
+
+function draw() {
+  cx.fillStyle = '#0b0f1a'; cx.fillRect(0, 0, W, H);
+  if (flash) { cx.fillStyle = `rgba(255,210,90,${flash * 0.15})`; cx.fillRect(0, 0, W, H); }
+  cx.lineWidth = S * 0.004; cx.strokeStyle = '#26324d';
+  for (const r of [R1, R2]) { cx.beginPath(); cx.arc(W / 2, H / 2, r, 0, 7); cx.stroke(); }
+  const g = cx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, S * 0.09);
+  g.addColorStop(0, '#fff6d0'); g.addColorStop(0.4, '#ffb347'); g.addColorStop(1, 'rgba(255,140,0,0)');
+  cx.fillStyle = g; cx.beginPath(); cx.arc(W / 2, H / 2, S * 0.09, 0, 7); cx.fill();
+  for (const s of sparks) {
+    const sx = W / 2 + Math.cos(s.a) * radius(s.r), sy = H / 2 + Math.sin(s.a) * radius(s.r);
+    cx.fillStyle = '#ffd25a'; cx.beginPath(); cx.arc(sx, sy, S * (0.012 + 0.003 * Math.sin(t * 6)), 0, 7); cx.fill();
+  }
+  for (const m of meteors) {
+    cx.strokeStyle = 'rgba(255,90,90,0.35)'; cx.lineWidth = S * 0.012; cx.beginPath();
+    cx.moveTo(m.x, m.y); cx.lineTo(m.x - m.vx * 0.12, m.y - m.vy * 0.12); cx.stroke();
+    cx.fillStyle = '#ff5a5a'; cx.beginPath(); cx.arc(m.x, m.y, S * 0.017, 0, 7); cx.fill();
+  }
+  for (const b of bits) { cx.globalAlpha = b.l; cx.fillStyle = b.col; cx.fillRect(b.x, b.y, S * 0.008, S * 0.008); }
+  cx.globalAlpha = 1;
+  if (state === 'play') {
+    const [px, py] = player();
+    cx.fillStyle = '#7fd4ff'; cx.beginPath(); cx.arc(px, py, S * 0.022, 0, 7); cx.fill();
+  }
+  cx.fillStyle = '#e8eefc'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+  { const [mx, my] = muteBtn(); cx.font = `${S * 0.045}px system-ui,sans-serif`; cx.globalAlpha = 0.7; cx.fillText(muted ? '🔇' : '🔊', mx, my); cx.globalAlpha = 1; }
+  const f = px => `bold ${S * px}px system-ui,sans-serif`;
+  if (state === 'play') {
+    cx.font = f(0.08); cx.fillText(score, W / 2, H / 2);
+    if (paused) { cx.font = f(0.05); cx.fillText('Paused · tap to resume', W / 2, H * 0.86); }
+  }
+  else {
+    cx.font = f(0.09); cx.fillText(state === 'menu' ? 'ORBIT HOP' : score, W / 2, H * 0.14);
+    cx.font = f(0.035); cx.fillStyle = '#9fb0d0';
+    cx.fillText(state === 'menu' ? 'Tap to hop between rings' : `Best ${best}`, W / 2, H * 0.86);
+    cx.fillText(state === 'menu' ? 'Grab sparks, dodge meteors' : 'Tap to play again', W / 2, H * 0.92);
+  }
+}
+let last = performance.now();
+function loop(now) {
+  update(Math.min(0.05, (now - last) / 1000)); last = now; draw(); requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
