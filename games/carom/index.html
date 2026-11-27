@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Carom Shot</title>
+<style>
+html,body{margin:0;height:100%;background:#10131c;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
+<script>
+// Carom Shot: bank a ball off walls and blocks to hit every target within 3 shots.
+// Levels are generated from a real shot path, so each one has at least one solution.
+const cv = document.getElementById('c'), cx = cv.getContext('2d');
+const FW = 400, FH = 600, BR = 7, TR = 14, STEP = 3; // field size, ball/target radius, sim step
+let W, H, K, OX, OY, DPR;
+function resize() {
+  DPR = Math.min(devicePixelRatio || 1, 2);
+  W = cv.width = innerWidth * DPR; H = cv.height = innerHeight * DPR;
+  K = Math.min(W / FW, H / (FH + 100)); OX = (W - FW * K) / 2; OY = (H - (FH + 100) * K) / 2 + 55 * K;
+}
+addEventListener('resize', resize); resize();
+
+const BEST_KEY = 'carom-best';
+let best = +localStorage.getItem(BEST_KEY) || 0;
+let ac = null, muted = false, adBusy = false, runs = 0, paused = false;
+// Portal SDK (CrazyGames v3). Optional: the game runs the same without it.
+let sdk = null;
+const cg = (f) => { try { if (sdk) f(sdk); } catch (e) {} };
+const store = { get: k => (sdk ? sdk.data : localStorage).getItem(k), set: (k, v) => (sdk ? sdk.data : localStorage).setItem(k, v) };
+(async () => {
+  try {
+    const S0 = window.CrazyGames && window.CrazyGames.SDK;
+    if (S0) { await S0.init(); if (S0.environment !== 'disabled') sdk = S0; }
+  } catch (e) {}
+  cg(s => { muted = s.game.settings.muteAudio; s.game.addSettingsChangeListener(st => { muted = st.muteAudio; }); });
+  best = +store.get(BEST_KEY) || best;
+})();
+function beep(f, d, type = 'sine', vol = 0.15, slide = 0) {
+  if (muted || adBusy) return;
+  try {
+    ac = ac || new AudioContext(); if (ac.state === 'suspended') ac.resume();
+    const o = ac.createOscillator(), g = ac.createGain(), n = ac.currentTime;
+    o.type = type; o.frequency.setValueAtTime(f, n); if (slide) o.frequency.exponentialRampToValueAtTime(slide, n + d);
+    g.gain.setValueAtTime(vol, n); g.gain.exponentialRampToValueAtTime(0.001, n + d);
+    o.connect(g).connect(ac.destination); o.start(n); o.stop(n + d);
+  } catch (e) {}
+}
+
+// --- simulation (shared by level generation, aim preview and the real shot) ---
+const BX = FW / 2, BY = FH - 30;
+const inBlock = (x, y, b, m = BR) => x > b.x - m && x < b.x + b.w + m && y > b.y - m && y < b.y + b.h + m;
+function sim(a, blocks, maxB, maxSteps = 4000) {
+  let x = BX, y = BY, vx = Math.cos(a) * STEP, vy = Math.sin(a) * STEP, bounces = 0;
+  const pts = [[x, y]], hits = []; // hits: [stepIndex, x, y] at each bounce
+  for (let i = 0; i < maxSteps; i++) {
+    let nx = x + vx, ny = y + vy, bx = false, by = false;
+    if (nx < BR || nx > FW - BR) bx = true;
+    if (ny < BR || ny > FH - BR) by = true;
+    for (const b of blocks) if (inBlock(nx, ny, b)) {
+      if (inBlock(x + vx, y, b)) bx = true; else if (inBlock(x, y + vy, b)) by = true; else { bx = by = true; }
+    }
+    if (bx || by) {
+      if (bounces >= maxB) break;
+      bounces++; if (bx) vx = -vx; if (by) vy = -vy;
+      nx = x + vx; ny = y + vy; hits.push([pts.length, x, y]);
+    }
+    x = nx; y = ny; pts.push([x, y]);
+  }
+  return { pts, hits, bounces };
+}
+function targetsHit(pts, targets) {
+  // Index of the first path point touching each target (or -1).
+  return targets.map(t => pts.findIndex(p => Math.hypot(p[0] - t.x, p[1] - t.y) < TR + BR));
+}
+
+// --- level generation ---
+let rnd = Math.random;
+function makeLevel(n) {
+  const maxB = Math.min(2 + Math.floor(n / 3), 6), nT = Math.min(1 + Math.ceil(n / 2), 5);
+  const nBlocks = Math.min(Math.floor(n / 2), 5);
+  for (let tries = 0; tries < 400; tries++) {
+    const blocks = [];
+    for (let i = 0; i < nBlocks; i++) {
+      const w = 40 + rnd() * 90, h = 14 + rnd() * 18;
+      const b = { x: 20 + rnd() * (FW - 40 - w), y: 70 + rnd() * 380, w, h };
+      if (!inBlock(BX, BY - 60, b, 50)) blocks.push(b);
+    }
+    const a = -Math.PI / 2 + (rnd() - 0.5) * 2.4;
+    const { pts, hits, bounces } = sim(a, blocks, maxB);
+    if (bounces < Math.min(maxB, 1 + Math.floor(n / 2))) continue;
+    // Put targets along the path, mostly after the first bounce, spread out.
+    const startI = n < 2 ? 30 : hits[0][0], targets = [];
+    for (let k = 0; k < 60 && targets.length < nT; k++) {
+      const p = pts[startI + Math.floor(rnd() * (pts.length - startI - 1))];
+      if (!p || p[1] > FH - 70) continue;
+      if (targets.some(t => Math.hypot(t.x - p[0], t.y - p[1]) < 60)) continue;
+      if (blocks.some(b => inBlock(p[0], p[1], b, TR + 4))) continue;
+      targets.push({ x: p[0], y: p[1] });
+    }
+    if (targets.length < nT) continue;
+    // Spread targets over several path segments so the level needs real banking.
+    const seg = T => { const i = pts.findIndex(p => p[0] === T.x && p[1] === T.y); return hits.filter(h => h[0] <= i).length; };
+    if (n > 1 && new Set(targets.map(seg)).size < Math.min(nT, n < 6 ? 2 : 3)) continue;
+    // Reject levels that a plain straight shot clears without banking.
+    if (n > 1 && targetsHit(sim(a, blocks, 0).pts, targets).every(i => i >= 0)) continue;
+    return { blocks, targets, maxB, preview: n <= 3 ? 2 : 1, sol: a };
+  }
+  return makeLevel(Math.max(1, n - 1));
+}
+
+// --- game state ---
+let state = 'menu', level = 1, shots = 3, L = null, aim = -Math.PI / 2, aiming = false;
+let shot = null, t = 0, bits = [], flash = 0, msg = '';
+function newLevel() { L = makeLevel(level); L.got = new Set(); shots = maxShots(); shot = null; }
+const maxShots = () => level >= 12 ? 2 : 3; // late levels tighten from 3 shots to 2
+function start() { level = 1; newLevel(); state = 'play'; paused = false; cg(s => s.game.gameplayStart()); }
+function fire() {
+  if (shot || state !== 'play') return;
+  const r = sim(aim, L.blocks, L.maxB);
+  shot = { ...r, at: targetsHit(r.pts, L.targets), i: 0, got: L.got, bi: 0 }; // hits stay hit across shots
+  shots--; msg = ''; beep(300, 0.1, 'triangle', 0.1, 500);
+}
+function burst(x, y, col, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 7, v = 40 + Math.random() * 160;
+    bits.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, l: 1, col });
+  }
+}
+
+// --- input ---
+const toField = e => [((e.clientX * DPR) - OX) / K, ((e.clientY * DPR) - OY) / K];
+const muteBtn = () => [FW - 18, -28, 22];
+function setAim(e) {
+  const [fx, fy] = toField(e); let a = Math.atan2(fy - BY, fx - BX);
+  if (a > -0.08) a = a > Math.PI / 2 ? -Math.PI + 0.08 : -0.08; // keep aim upward
+  aim = a;
+}
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault(); if (ac && ac.state === 'suspended') ac.resume();
+  if (adBusy) return;
+  const [fx, fy] = toField(e), [mx, my, mr] = muteBtn();
+  if (Math.hypot(fx - mx, fy - my) < mr) { muted = !muted; return; }
+  if (paused) { paused = false; cg(s => s.game.gameplayStart()); return; }
+  if (state === 'play') { if (!shot) { aiming = true; setAim(e); } }
+  else if (state === 'menu' || (state === 'over' && t > 0.6)) {
+    // A midgame ad every third restart; the SDK refuses it where ads are off (e.g. Basic Launch).
+    if (state === 'over' && sdk && runs % 3 === 0) {
+      adBusy = true; const done = () => { adBusy = false; start(); };
+      cg(s => s.ad.requestAd('midgame', { adStarted: () => {}, adFinished: done, adError: done }));
+    } else start();
+  }
+});
+cv.addEventListener('pointermove', e => { if (aiming) setAim(e); });
+cv.addEventListener('pointerup', () => { if (aiming) { aiming = false; fire(); } });
+addEventListener('keydown', e => {
+  if (e.code === 'KeyM') { muted = !muted; return; }
+  if (e.code === 'KeyP' || e.code === 'Escape') { pause(); return; }
+  if (state === 'play' && !paused) {
+    const fine = e.shiftKey ? 0.003 : 0.02;
+    if (e.code === 'ArrowLeft') aim = Math.max(-Math.PI + 0.08, aim - fine);
+    if (e.code === 'ArrowRight') aim = Math.min(-0.08, aim + fine);
+    if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); if (paused) paused = false; else fire(); }
+  } else if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); cv.dispatchEvent(new PointerEvent('pointerdown', { clientX: -999, clientY: -999 })); }
+});
+function pause() { if (state === 'play' && !paused) { paused = true; aiming = false; cg(s => s.game.gameplayStop()); } }
+addEventListener('blur', pause);
+document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+
+// --- update ---
+function update(dt) {
+  t += dt; flash = Math.max(0, flash - dt * 2);
+  for (const b of bits) { b.x += b.vx * dt; b.y += b.vy * dt; b.l -= dt * 1.6; }
+  bits = bits.filter(b => b.l > 0);
+  if (state !== 'play' || paused || adBusy || !shot) return;
+  const end = Math.min(shot.i + Math.round(dt * 360), shot.pts.length - 1); // ~1000 px/s
+  for (let i = shot.i + 1; i <= end; i++) {
+    shot.at.forEach((ti, k) => {
+      if (ti === i && !shot.got.has(k)) { shot.got.add(k); const T = L.targets[k]; burst(T.x, T.y, '#7dffb0', 14); beep(700 + shot.got.size * 120, 0.12, 'sine', 0.12); }
+    });
+    while (shot.bi < shot.hits.length && shot.hits[shot.bi][0] <= i) { shot.bi++; beep(180, 0.05, 'square', 0.05); }
+  }
+  shot.i = end;
+  if (shot.got.size === L.targets.length || shot.i >= shot.pts.length - 1) {
+    if (shot.got.size === L.targets.length) {
+      level++; flash = 1; msg = shots === maxShots() - 1 ? 'Perfect!' : 'Clear!'; beep(520, 0.25, 'triangle', 0.1, 1040);
+      if (level - 1 > best) { best = level - 1; try { store.set(BEST_KEY, best); } catch (e) {} if (best > 3) cg(s => s.game.happytime()); }
+      newLevel();
+    } else if (shots <= 0) {
+      state = 'over'; t = 0; runs++; beep(200, 0.5, 'square', 0.08, 60); cg(s => s.game.gameplayStop());
+    } else { shot = null; msg = shots === 1 ? 'Last shot' : ''; }
+  }
+}
+
+// --- draw ---
+function draw() {
+  cx.setTransform(1, 0, 0, 1, 0, 0); cx.fillStyle = '#10131c'; cx.fillRect(0, 0, W, H);
+  cx.setTransform(K, 0, 0, K, OX, OY);
+  cx.fillStyle = '#171c2a'; cx.fillRect(0, 0, FW, FH);
+  if (flash) { cx.fillStyle = `rgba(125,255,176,${flash * 0.12})`; cx.fillRect(0, 0, FW, FH); }
+  cx.strokeStyle = '#3a4566'; cx.lineWidth = 3; cx.strokeRect(0, 0, FW, FH);
+  cx.textAlign = 'center'; cx.textBaseline = 'middle';
+  cx.font = '20px system-ui,sans-serif'; cx.globalAlpha = 0.7; cx.fillStyle = '#e8eefc';
+  cx.fillText(muted ? '🔇' : '🔊', ...muteBtn().slice(0, 2)); cx.globalAlpha = 1;
+  if (state === 'play' && L) {
+    for (const b of L.blocks) { cx.fillStyle = '#56628a'; cx.fillRect(b.x, b.y, b.w, b.h); }
+    L.targets.forEach((T, k) => {
+      if (L.got.has(k)) return;
+      cx.strokeStyle = '#7dffb0'; cx.lineWidth = 3; cx.beginPath(); cx.arc(T.x, T.y, TR, 0, 7); cx.stroke();
+      cx.fillStyle = '#7dffb0'; cx.beginPath(); cx.arc(T.x, T.y, 4 + Math.sin(t * 5 + k) * 1.5, 0, 7); cx.fill();
+    });
+    if (!shot) {
+      // Aim preview: the first segment (and the second on early levels), dotted.
+      const p = sim(aim, L.blocks, L.preview - 1, 400).pts;
+      cx.fillStyle = 'rgba(232,238,252,0.55)';
+      for (let i = 6; i < p.length; i += 6) { cx.beginPath(); cx.arc(p[i][0], p[i][1], 1.8, 0, 7); cx.fill(); }
+      cx.fillStyle = '#ffd25a'; cx.beginPath(); cx.arc(BX, BY, BR, 0, 7); cx.fill();
+    } else {
+      cx.strokeStyle = 'rgba(255,210,90,0.25)'; cx.lineWidth = 2; cx.beginPath();
+      for (let i = Math.max(0, shot.i - 60); i <= shot.i; i++) cx.lineTo(shot.pts[i][0], shot.pts[i][1]);
+      cx.stroke();
+      const [x, y] = shot.pts[shot.i]; cx.fillStyle = '#ffd25a'; cx.beginPath(); cx.arc(x, y, BR, 0, 7); cx.fill();
+    }
+    for (const b of bits) { cx.globalAlpha = b.l; cx.fillStyle = b.col; cx.fillRect(b.x, b.y, 3, 3); }
+    cx.globalAlpha = 1;
+    cx.fillStyle = '#e8eefc'; cx.font = 'bold 22px system-ui,sans-serif'; cx.textAlign = 'left';
+    cx.fillText('Level ' + level, 4, -28);
+    cx.textAlign = 'center'; cx.font = '15px system-ui,sans-serif'; cx.fillStyle = '#9fb0d0';
+    cx.fillText(`Bounces ${L.maxB}  ·  Shots ${'●'.repeat(shots)}${'○'.repeat(maxShots() - shots)}`, FW / 2, FH + 22);
+    if (paused) { cx.fillStyle = '#e8eefc'; cx.font = 'bold 24px system-ui,sans-serif'; cx.fillText('Paused · tap to resume', FW / 2, FH / 2); }
+    else if (msg && !shot) { cx.fillStyle = '#e8eefc'; cx.font = 'bold 20px system-ui,sans-serif'; cx.fillText(msg, FW / 2, FH - 70); }
+  } else {
+    cx.fillStyle = '#e8eefc'; cx.font = 'bold 44px system-ui,sans-serif';
+    cx.fillText(state === 'menu' ? 'CAROM SHOT' : 'Level ' + level, FW / 2, 150);
+    cx.font = '17px system-ui,sans-serif'; cx.fillStyle = '#9fb0d0';
+    const lines = state === 'menu'
+      ? ['Drag to aim, release to shoot', 'Bank off walls and blocks', 'to hit every target in 3 shots.', 'All in one shot = Perfect!', '', 'Tap to start']
+      : ['Out of shots', `Best: level ${best}`, '', 'Tap to play again'];
+    lines.forEach((s, i) => cx.fillText(s, FW / 2, 330 + i * 30));
+  }
+}
+let last = performance.now();
+function loop(now) { update(Math.min(0.05, (now - last) / 1000)); last = now; draw(); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
